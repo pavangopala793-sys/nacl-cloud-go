@@ -453,8 +453,10 @@ func sendSupabaseInvitation(email string) error {
 	}
 
 	payload := map[string]interface{}{
-		"email":       email,
-		"redirect_to": fmt.Sprintf("%s/auth/callback", strings.TrimSuffix(supabaseURL, "/")),
+		"email": email,
+		"options": map[string]interface{}{
+			"redirect_to": fmt.Sprintf("%s/auth/callback", strings.TrimSuffix(supabaseURL, "/")),
+		},
 	}
 
 	jsonPayload, err := json.Marshal(payload)
