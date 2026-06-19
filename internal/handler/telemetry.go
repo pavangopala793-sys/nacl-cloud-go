@@ -407,9 +407,17 @@ func (h *TelemetryHandler) CreatePlan(c *fiber.Ctx) error {
 		execID = compRes.ExecutionId
 	}
 
+	// Fetch workspace settings from DB to check if SRE/Admin approval is required
+	settings, err := h.svc.GetWorkspaceSettings(c.UserContext(), tenantID)
+	sreApprovalRequired := true
+	if err == nil && settings != nil {
+		sreApprovalRequired = settings.SreApprovalRequired
+	}
+
 	// Build the response format expected by the CLI
 	return c.JSON(fiber.Map{
 		"lineage_epoch_hash": lineageHash,
+		"sre_approval_required": sreApprovalRequired,
 		"blast_radius": fiber.Map{
 			"risk_score":              safetyRes.RiskScore,
 			"risk_level":              safetyRes.RiskLevel,
