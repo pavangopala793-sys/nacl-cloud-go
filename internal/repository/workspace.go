@@ -21,6 +21,7 @@ type WorkspaceMemberRow struct {
 	UserID      string `json:"user_id"`
 	Role        string `json:"role"`
 	JoinedAt    string `json:"joined_at"`
+	Email       string `json:"email"`
 }
 
 type WorkspaceRepository interface {
@@ -149,9 +150,10 @@ func (r *PostgresWorkspaceRepository) GetWorkspaceOwner(ctx context.Context, wsI
 
 func (r *PostgresWorkspaceRepository) ListWorkspaceMembers(ctx context.Context, wsID string) ([]WorkspaceMemberRow, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT workspace_id, user_id, role, joined_at::text as joined_at 
-		 FROM workspace_members 
-		 WHERE workspace_id = $1`,
+		`SELECT wm.workspace_id, wm.user_id, wm.role, wm.joined_at::text as joined_at, COALESCE(d.email, wm.user_id) as email
+		 FROM workspace_members wm
+		 LEFT JOIN developers d ON wm.user_id = d.id
+		 WHERE wm.workspace_id = $1`,
 		wsID,
 	)
 	if err != nil {
@@ -162,7 +164,7 @@ func (r *PostgresWorkspaceRepository) ListWorkspaceMembers(ctx context.Context, 
 	result := []WorkspaceMemberRow{}
 	for rows.Next() {
 		var m WorkspaceMemberRow
-		if err := rows.Scan(&m.WorkspaceID, &m.UserID, &m.Role, &m.JoinedAt); err == nil {
+		if err := rows.Scan(&m.WorkspaceID, &m.UserID, &m.Role, &m.JoinedAt, &m.Email); err == nil {
 			result = append(result, m)
 		}
 	}

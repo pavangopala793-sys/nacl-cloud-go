@@ -431,6 +431,7 @@ func (m *ClerkAuthMiddleware) Authenticate() fiber.Handler {
 			clerkUserEmail = c.Get("x-clerk-user-email")
 		}
 		if clerkUserID != "" && clerkUserEmail != "" {
+			_ = m.upsertUserEmail(c.UserContext(), clerkUserID, clerkUserEmail)
 			_ = m.autoAcceptInvitations(c.UserContext(), clerkUserID, clerkUserEmail)
 		}
 
@@ -518,4 +519,16 @@ func (m *ClerkAuthMiddleware) autoAcceptInvitations(ctx context.Context, userID,
 	}
 
 	return nil
+}
+
+func (m *ClerkAuthMiddleware) upsertUserEmail(ctx context.Context, userID, email string) error {
+	_, err := m.db.ExecContext(ctx, `
+		INSERT INTO developers (id, email, name)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email
+	`, userID, email, strings.Split(email, "@")[0])
+	if err != nil {
+		log.Printf("Warning: failed to upsert user email for %s: %v", userID, err)
+	}
+	return err
 }
