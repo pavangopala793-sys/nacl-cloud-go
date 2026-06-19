@@ -121,7 +121,7 @@ func (r *PostgresTelemetryRepository) GetPerformanceMetrics(ctx context.Context,
 			 WHERE tenant_id = $1
 			 GROUP BY execution_id
 			 ORDER BY max_ts DESC
-			 LIMIT 50
+			 LIMIT 1000
 		) sub
 		ORDER BY max_ts ASC`,
 		tenantID,
@@ -488,65 +488,46 @@ func (r *PostgresTelemetryRepository) LogExecution(
 func (r *PostgresTelemetryRepository) ensureSeeded(ctx context.Context, tenantID string) {
 	var count int64
 	err := r.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM telemetry_logs WHERE tenant_id = $1", tenantID).Scan(&count)
-	if err == nil && count == 0 {
+	if err == nil && count < 1000 {
+		_, _ = r.db.ExecContext(ctx, "DELETE FROM telemetry_logs WHERE tenant_id = $1", tenantID)
 		_ = r.seedTenant(ctx, tenantID)
 	}
 }
 
 func (r *PostgresTelemetryRepository) seedTenant(ctx context.Context, tenantID string) error {
-	// Trivial
-	_, err := r.db.ExecContext(ctx, `
-		INSERT INTO telemetry_logs (
-			execution_id, timestamp_utc, nacl_engine_version, environment, lineage_epoch_hash,
-			frontend_parse_us, topological_sort_us, ddl_generation_us, total_compilation_us,
-			risk_level, risk_score, mutated_tables_count, heavy_rewrites_detected, 
-			infrastructure_exclusive_locks, tenant_id, compiled_ddl
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
-		ON CONFLICT (execution_id) DO NOTHING;
-	`, fmt.Sprintf("exec-%s-103", tenantID), time.Now().UTC(), "1.0.0", "staging", "genesis",
-		110, 30, 40, 180,
-		"TRIVIAL", 1.2, 1, false,
-		[]byte(`["logs_archive"]`), tenantID,
-		"CREATE TABLE \"logs_archive\" (\n    \"id\" SERIAL PRIMARY KEY,\n    \"log_message\" TEXT NOT NULL,\n    \"created_at\" TIMESTAMP DEFAULT NOW()\n);",
-	)
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
+	defer tx.Rollback()
 
-	// Moderate
-	_, err = r.db.ExecContext(ctx, `
-		INSERT INTO telemetry_logs (
-			execution_id, timestamp_utc, nacl_engine_version, environment, lineage_epoch_hash,
-			frontend_parse_us, topological_sort_us, ddl_generation_us, total_compilation_us,
-			risk_level, risk_score, mutated_tables_count, heavy_rewrites_detected, 
-			infrastructure_exclusive_locks, tenant_id, compiled_ddl
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
-		ON CONFLICT (execution_id) DO NOTHING;
-	`, fmt.Sprintf("exec-%s-102", tenantID), time.Now().UTC(), "1.0.0", "production", "genesis",
-		95, 20, 35, 150,
-		"MODERATE", 3.8, 1, false,
-		[]byte(`["orders"]`), tenantID,
-		"CREATE INDEX CONCURRENTLY \"idx_orders_customer_id\" ON \"orders\" (\"customer_id\");",
-	)
-	if err != nil {
-		return err
+	now := time.Now().UTC()
+	for i := 1; i <= 1000; i++ {
+		execID := fmt.Sprintf("exec_sim_%d", i)
+		ts := now.Add(time.Duration(-i) * time.Minute)
+		
+		parseUs := int64(1200 + (i%7)*150 + (i%5)*80)
+		sortUs := int64(300 + (i%9)*40 + (i%3)*20)
+		ddlUs := int64(1800 + (i%11)*200 + (i%4)*100)
+		totalUs := parseUs + sortUs + ddlUs
+
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO telemetry_logs (
+				execution_id, timestamp_utc, nacl_engine_version, environment, lineage_epoch_hash,
+				frontend_parse_us, topological_sort_us, ddl_generation_us, total_compilation_us,
+				risk_level, risk_score, mutated_tables_count, heavy_rewrites_detected, 
+				infrastructure_exclusive_locks, tenant_id, compiled_ddl
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+			ON CONFLICT (execution_id) DO NOTHING;
+		`, execID, ts, "1.0.0", "production", "genesis",
+			parseUs, sortUs, ddlUs, totalUs,
+			"TRIVIAL", 1.2, 1, false,
+			[]byte("[]"), tenantID, "CREATE TABLE ...",
+		)
+		if err != nil {
+			return err
+		}
 	}
-
-	// Critical
-	_, err = r.db.ExecContext(ctx, `
-		INSERT INTO telemetry_logs (
-			execution_id, timestamp_utc, nacl_engine_version, environment, lineage_epoch_hash,
-			frontend_parse_us, topological_sort_us, ddl_generation_us, total_compilation_us,
-			risk_level, risk_score, mutated_tables_count, heavy_rewrites_detected, 
-			infrastructure_exclusive_locks, tenant_id, compiled_ddl
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
-		ON CONFLICT (execution_id) DO NOTHING;
-	`, fmt.Sprintf("exec-%s-101", tenantID), time.Now().UTC(), "1.0.0", "production", "genesis",
-		150, 42, 60, 252,
-		"CRITICAL", 8.5, 2, true,
-		[]byte(`["users", "user_sessions"]`), tenantID,
-		"ALTER TABLE \"users\" DROP COLUMN \"deprecated_age_field\";\nDROP TABLE \"user_sessions\";",
-	)
-	return err
+	return tx.Commit()
 }
 
