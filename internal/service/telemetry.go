@@ -9,6 +9,7 @@ import (
 	"github.com/nacl-org/nacl-cloud-go/internal/repository"
 	pb "github.com/nacl-org/nacl-cloud-go/pkg/pb/engine/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 type TelemetryService struct {
@@ -104,10 +105,30 @@ func (s *TelemetryService) LogManualDispatch(ctx context.Context, id, environmen
 
 // CompileSchema calls gRPC CompileSchema endpoint on the Rust compiler engine
 func (s *TelemetryService) CompileSchema(ctx context.Context, schemaContent, env, tenantID string) (*pb.CompileSchemaResponse, error) {
+	// Fetch workspace settings from DB
+	var settingsJSON []byte
+	settings := &pb.WorkspaceSettings{
+		PaddingEnabled:      true,
+		ChunkingEnabled:     true,
+		DefaultChunkSize:    5000,
+		LockTimeoutMs:       2000,
+		MaxRetries:          5,
+		SreApprovalRequired: true,
+		SandboxDryRun:       false,
+	}
+
+	err := s.db.QueryRowContext(ctx, "SELECT settings FROM workspaces WHERE id = $1", tenantID).Scan(&settingsJSON)
+	if err == nil && len(settingsJSON) > 0 && string(settingsJSON) != "{}" {
+		if err := protojson.Unmarshal(settingsJSON, settings); err != nil {
+			fmt.Printf("Error unmarshaling workspace settings: %v\n", err)
+		}
+	}
+
 	return s.grpcClient.CompileSchema(ctx, &pb.CompileSchemaRequest{
 		SchemaContent: schemaContent,
 		Environment:   env,
 		TenantId:      tenantID,
+		Settings:      settings,
 	})
 }
 

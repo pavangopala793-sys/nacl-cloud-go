@@ -26,6 +26,7 @@ type CompileSchemaRequest struct {
 	SchemaContent string                 `protobuf:"bytes,1,opt,name=schema_content,json=schemaContent,proto3" json:"schema_content,omitempty"` // Raw text of the schema.infra file
 	Environment   string                 `protobuf:"bytes,2,opt,name=environment,proto3" json:"environment,omitempty"`                          // Target environment (production, staging, etc.)
 	TenantId      string                 `protobuf:"bytes,3,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`                // Workspace tenant ID context
+	Settings      *WorkspaceSettings     `protobuf:"bytes,4,opt,name=settings,proto3" json:"settings,omitempty"`                                // User-configured compiler/workspace settings
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -79,6 +80,13 @@ func (x *CompileSchemaRequest) GetTenantId() string {
 		return x.TenantId
 	}
 	return ""
+}
+
+func (x *CompileSchemaRequest) GetSettings() *WorkspaceSettings {
+	if x != nil {
+		return x.Settings
+	}
+	return nil
 }
 
 type CompileSchemaResponse struct {
@@ -589,11 +597,12 @@ var File_engine_proto protoreflect.FileDescriptor
 
 const file_engine_proto_rawDesc = "" +
 	"\n" +
-	"\fengine.proto\x12\x0enacl.engine.v1\"|\n" +
+	"\fengine.proto\x12\x0enacl.engine.v1\"\xbb\x01\n" +
 	"\x14CompileSchemaRequest\x12%\n" +
 	"\x0eschema_content\x18\x01 \x01(\tR\rschemaContent\x12 \n" +
 	"\venvironment\x18\x02 \x01(\tR\venvironment\x12\x1b\n" +
-	"\ttenant_id\x18\x03 \x01(\tR\btenantId\"\xbb\x01\n" +
+	"\ttenant_id\x18\x03 \x01(\tR\btenantId\x12=\n" +
+	"\bsettings\x18\x04 \x01(\v2!.nacl.engine.v1.WorkspaceSettingsR\bsettings\"\xbb\x01\n" +
 	"\x15CompileSchemaResponse\x12!\n" +
 	"\fexecution_id\x18\x01 \x01(\tR\vexecutionId\x12!\n" +
 	"\fcompiled_ddl\x18\x02 \x01(\tR\vcompiledDdl\x12'\n" +
@@ -666,19 +675,20 @@ var file_engine_proto_goTypes = []any{
 	(*WorkspaceSettings)(nil),     // 8: nacl.engine.v1.WorkspaceSettings
 }
 var file_engine_proto_depIdxs = []int32{
-	2, // 0: nacl.engine.v1.CompileSchemaResponse.spans:type_name -> nacl.engine.v1.CompilerSpans
-	5, // 1: nacl.engine.v1.LintSchemaResponse.errors:type_name -> nacl.engine.v1.ValidationError
-	0, // 2: nacl.engine.v1.EngineService.CompileSchema:input_type -> nacl.engine.v1.CompileSchemaRequest
-	3, // 3: nacl.engine.v1.EngineService.LintSchema:input_type -> nacl.engine.v1.LintSchemaRequest
-	6, // 4: nacl.engine.v1.EngineService.VerifySafety:input_type -> nacl.engine.v1.VerifySafetyRequest
-	1, // 5: nacl.engine.v1.EngineService.CompileSchema:output_type -> nacl.engine.v1.CompileSchemaResponse
-	4, // 6: nacl.engine.v1.EngineService.LintSchema:output_type -> nacl.engine.v1.LintSchemaResponse
-	7, // 7: nacl.engine.v1.EngineService.VerifySafety:output_type -> nacl.engine.v1.VerifySafetyResponse
-	5, // [5:8] is the sub-list for method output_type
-	2, // [2:5] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	8, // 0: nacl.engine.v1.CompileSchemaRequest.settings:type_name -> nacl.engine.v1.WorkspaceSettings
+	2, // 1: nacl.engine.v1.CompileSchemaResponse.spans:type_name -> nacl.engine.v1.CompilerSpans
+	5, // 2: nacl.engine.v1.LintSchemaResponse.errors:type_name -> nacl.engine.v1.ValidationError
+	0, // 3: nacl.engine.v1.EngineService.CompileSchema:input_type -> nacl.engine.v1.CompileSchemaRequest
+	3, // 4: nacl.engine.v1.EngineService.LintSchema:input_type -> nacl.engine.v1.LintSchemaRequest
+	6, // 5: nacl.engine.v1.EngineService.VerifySafety:input_type -> nacl.engine.v1.VerifySafetyRequest
+	1, // 6: nacl.engine.v1.EngineService.CompileSchema:output_type -> nacl.engine.v1.CompileSchemaResponse
+	4, // 7: nacl.engine.v1.EngineService.LintSchema:output_type -> nacl.engine.v1.LintSchemaResponse
+	7, // 8: nacl.engine.v1.EngineService.VerifySafety:output_type -> nacl.engine.v1.VerifySafetyResponse
+	6, // [6:9] is the sub-list for method output_type
+	3, // [3:6] is the sub-list for method input_type
+	3, // [3:3] is the sub-list for extension type_name
+	3, // [3:3] is the sub-list for extension extendee
+	0, // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_engine_proto_init() }
