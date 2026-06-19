@@ -1,0 +1,27 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Root Executables only (non-recursive)
+/nacl-cloud
+/nacl-telemetry-worker
+/nacl-traffic-simulator
+
+# Specific binary paths
+cmd/nacl-cloud/nacl-cloud
+cmd/nacl-telemetry-worker/nacl-telemetry-worker-go
+cmd/nacl-traffic-simulator/nacl-traffic-simulator-go
+cmd/nacl-telemetry-worker/nacl-telemetry-worker
+cmd/nacl-traffic-simulator/nacl-traffic-simulator
+
+# Logs
+*.log
