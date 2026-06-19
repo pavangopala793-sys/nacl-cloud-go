@@ -350,6 +350,7 @@ func (m *ClerkAuthMiddleware) Authenticate() fiber.Handler {
 		var workspaceID string
 		var role string
 		var dbURL string
+		var clerkUserEmail string
 
 		// 1. Check direct headers (development / staging / CLI bypass context)
 		if uid := c.Get("x-clerk-user-id"); uid != "" {
@@ -366,22 +367,32 @@ func (m *ClerkAuthMiddleware) Authenticate() fiber.Handler {
 
 			// Check if it is a JWT (contains three dot-separated segments)
 			if strings.Count(token, ".") == 2 {
-				// Parse and validate Clerk JWT
+				// Parse and validate JWT (support HS256 for Supabase, RS256 for Clerk)
 				parsedToken, err := jwt.Parse(token, func(t *jwt.Token) (interface{}, error) {
-					if _, ok := t.Method.(*jwt.SigningMethodRSA); !ok {
-						return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
+					if _, ok := t.Method.(*jwt.SigningMethodHMAC); ok {
+						supabaseJwtSecret := os.Getenv("SUPABASE_JWT_SECRET")
+						if supabaseJwtSecret == "" {
+							supabaseJwtSecret = "super-secret-jwt-key-with-at-least-32-characters-long"
+						}
+						return []byte(supabaseJwtSecret), nil
 					}
-					kid, ok := t.Header["kid"].(string)
-					if !ok {
-						return nil, fmt.Errorf("missing kid in token header")
+					if _, ok := t.Method.(*jwt.SigningMethodRSA); ok {
+						kid, _ := t.Header["kid"].(string)
+						if kid == "" {
+							return nil, fmt.Errorf("missing kid in token header")
+						}
+						return m.getPublicKey(kid)
 					}
-					return m.getPublicKey(kid)
+					return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
 				})
 
 				if err == nil && parsedToken.Valid {
 					if claims, ok := parsedToken.Claims.(jwt.MapClaims); ok {
 						if sub, ok := claims["sub"].(string); ok {
 							clerkUserID = sub
+						}
+						if email, ok := claims["email"].(string); ok {
+							clerkUserEmail = email
 						}
 					}
 				} else {
@@ -407,7 +418,9 @@ func (m *ClerkAuthMiddleware) Authenticate() fiber.Handler {
 			})
 		}
 
-		clerkUserEmail := c.Get("x-clerk-user-email")
+		if clerkUserEmail == "" {
+			clerkUserEmail = c.Get("x-clerk-user-email")
+		}
 		if clerkUserID != "" && clerkUserEmail != "" {
 			_ = m.autoAcceptInvitations(c.UserContext(), clerkUserID, clerkUserEmail)
 		}

@@ -426,10 +426,10 @@ func (h *WorkspaceHandler) CreateInvitation(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": fmt.Sprintf("Failed to generate invitation: %v", err)})
 	}
 
-	clerkErr := sendClerkInvitation(invite.Email)
+	supabaseErr := sendSupabaseInvitation(invite.Email)
 	clerkSent := true
-	if clerkErr != nil {
-		log.Printf("Warning: failed to dispatch Clerk invitation: %v", clerkErr)
+	if supabaseErr != nil {
+		log.Printf("Warning: failed to dispatch Supabase invitation: %v", supabaseErr)
 		clerkSent = false
 	}
 
@@ -443,16 +443,17 @@ func (h *WorkspaceHandler) CreateInvitation(c *fiber.Ctx) error {
 	})
 }
 
-func sendClerkInvitation(email string) error {
-	clerkSecretKey := os.Getenv("CLERK_SECRET_KEY")
-	if clerkSecretKey == "" {
-		log.Println("Warning: CLERK_SECRET_KEY not set. Skipping Clerk invitation email dispatch.")
+func sendSupabaseInvitation(email string) error {
+	supabaseURL := os.Getenv("NEXT_PUBLIC_SUPABASE_URL")
+	serviceRoleKey := os.Getenv("SUPABASE_SERVICE_ROLE_KEY")
+
+	if supabaseURL == "" || serviceRoleKey == "" {
+		log.Println("Warning: NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY not set. Skipping Supabase invitation email dispatch.")
 		return nil
 	}
 
 	payload := map[string]interface{}{
-		"email_address": email,
-		"ignore_existing": true,
+		"email": email,
 	}
 
 	jsonPayload, err := json.Marshal(payload)
@@ -460,12 +461,14 @@ func sendClerkInvitation(email string) error {
 		return err
 	}
 
-	req, err := http.NewRequest("POST", "https://api.clerk.com/v1/invitations", bytes.NewBuffer(jsonPayload))
+	url := fmt.Sprintf("%s/auth/v1/admin/invite", strings.TrimSuffix(supabaseURL, "/"))
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonPayload))
 	if err != nil {
 		return err
 	}
 
-	req.Header.Set("Authorization", "Bearer "+clerkSecretKey)
+	req.Header.Set("apikey", serviceRoleKey)
+	req.Header.Set("Authorization", "Bearer "+serviceRoleKey)
 	req.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{Timeout: 5 * time.Second}
@@ -477,10 +480,10 @@ func sendClerkInvitation(email string) error {
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("clerk api returned status %d: %s", resp.StatusCode, string(respBody))
+		return fmt.Errorf("supabase api returned status %d: %s", resp.StatusCode, string(respBody))
 	}
 
-	log.Printf("Successfully triggered Clerk email invitation for %s", email)
+	log.Printf("Successfully triggered Supabase email invitation for %s", email)
 	return nil
 }
 
