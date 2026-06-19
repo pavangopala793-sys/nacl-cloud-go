@@ -185,13 +185,18 @@ func (r *PostgresTelemetryRepository) GetVelocityMetrics(ctx context.Context, te
 	r.ensureSeeded(ctx, tenantID)
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT 
-			TO_CHAR(timestamp_utc, 'Dy') as day,
+			TO_CHAR(timestamp_utc, 'HH24:MI') as date,
 			SUM(CASE WHEN risk_score <= 2.0 THEN 1 ELSE 0 END)::BIGINT as autonomous,
 			SUM(CASE WHEN risk_score > 2.0 THEN 1 ELSE 0 END)::BIGINT as manual
-		 FROM telemetry_logs
-		 WHERE tenant_id = $1
-		 GROUP BY day
-		 LIMIT 7`,
+		 FROM (
+		 	SELECT timestamp_utc, risk_score
+		 	FROM telemetry_logs
+		 	WHERE tenant_id = $1
+		 	ORDER BY timestamp_utc DESC
+		 	LIMIT 300
+		 ) sub
+		 GROUP BY date, timestamp_utc
+		 ORDER BY timestamp_utc DESC`,
 		tenantID,
 	)
 	if err != nil {
@@ -503,7 +508,7 @@ func (r *PostgresTelemetryRepository) seedTenant(ctx context.Context, tenantID s
 
 	now := time.Now().UTC()
 	for i := 1; i <= 1000; i++ {
-		execID := fmt.Sprintf("exec_sim_%d", i)
+		execID := fmt.Sprintf("exec_sim_%s_%d", tenantID, i)
 		ts := now.Add(time.Duration(-i) * time.Minute)
 		
 		parseUs := int64(1200 + (i%7)*150 + (i%5)*80)
