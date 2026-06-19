@@ -277,31 +277,17 @@ func authenticateM2MToken(token string) (string, string, error) {
 }
 
 func (m *ClerkAuthMiddleware) resolveWorkspaceAndRole(clerkUserID string, requestedWorkspaceID string) (string, string, error) {
-	// Query memberships
-	rows, err := m.db.Query("SELECT workspace_id, role FROM workspace_members WHERE user_id = $1", clerkUserID)
+	// 1. Ensure the user's personal sandbox workspace exists
+	personalWSID := fmt.Sprintf("personal-%s", strings.Replace(clerkUserID, "user_", "", 1))
+	personalWSName := "Personal Sandbox"
+
+	var exists bool
+	err := m.db.QueryRow("SELECT EXISTS(SELECT 1 FROM workspaces WHERE id = $1)", personalWSID).Scan(&exists)
 	if err != nil {
 		return "", "", err
 	}
-	defer rows.Close()
 
-	type membership struct {
-		workspaceID string
-		role        string
-	}
-
-	var memberships []membership
-	for rows.Next() {
-		var m membership
-		if err := rows.Scan(&m.workspaceID, &m.role); err == nil {
-			memberships = append(memberships, m)
-		}
-	}
-
-	// If no memberships, auto-create a personal sandbox
-	if len(memberships) == 0 {
-		personalWSID := fmt.Sprintf("personal-%s", strings.Replace(clerkUserID, "user_", "", 1))
-		personalWSName := "Personal Sandbox"
-
+	if !exists {
 		tx, err := m.db.Begin()
 		if err != nil {
 			return "", "", err
@@ -327,8 +313,31 @@ func (m *ClerkAuthMiddleware) resolveWorkspaceAndRole(clerkUserID string, reques
 		if err := tx.Commit(); err != nil {
 			return "", "", err
 		}
+		log.Printf("[Auth] Auto-created personal sandbox %s for user %s", personalWSID, clerkUserID)
+	}
 
-		return personalWSID, "Admin", nil
+	// 2. Query memberships
+	rows, err := m.db.Query("SELECT workspace_id, role FROM workspace_members WHERE user_id = $1", clerkUserID)
+	if err != nil {
+		return "", "", err
+	}
+	defer rows.Close()
+
+	type membership struct {
+		workspaceID string
+		role        string
+	}
+
+	var memberships []membership
+	for rows.Next() {
+		var m membership
+		if err := rows.Scan(&m.workspaceID, &m.role); err == nil {
+			memberships = append(memberships, m)
+		}
+	}
+
+	if len(memberships) == 0 {
+		return "", "", fmt.Errorf("no memberships found even after personal sandbox creation")
 	}
 
 	if requestedWorkspaceID != "" {
