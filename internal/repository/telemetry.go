@@ -110,16 +110,20 @@ func NewTelemetryRepository(db *sql.DB) TelemetryRepository {
 func (r *PostgresTelemetryRepository) GetPerformanceMetrics(ctx context.Context, tenantID string) ([]PerformancePayload, error) {
 	r.ensureSeeded(ctx, tenantID)
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT 
-			execution_id as run,
-			AVG(frontend_parse_us)::BIGINT as parse,
-			AVG(topological_sort_us)::BIGINT as sort,
-			AVG(ddl_generation_us)::BIGINT as ddl
-		 FROM telemetry_logs
-		 WHERE tenant_id = $1
-		 GROUP BY execution_id
-		 ORDER BY MAX(timestamp_utc) DESC
-		 LIMIT 7`,
+		`SELECT run, parse, sort, ddl FROM (
+			SELECT 
+				execution_id as run,
+				AVG(frontend_parse_us)::BIGINT as parse,
+				AVG(topological_sort_us)::BIGINT as sort,
+				AVG(ddl_generation_us)::BIGINT as ddl,
+				MAX(timestamp_utc) as max_ts
+			 FROM telemetry_logs
+			 WHERE tenant_id = $1
+			 GROUP BY execution_id
+			 ORDER BY max_ts DESC
+			 LIMIT 50
+		) sub
+		ORDER BY max_ts ASC`,
 		tenantID,
 	)
 	if err != nil {
