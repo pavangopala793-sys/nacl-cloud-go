@@ -374,27 +374,33 @@ func (h *WorkspaceHandler) GetService() *service.WorkspaceService {
 }
 
 type CreateInvitationRequest struct {
-	Email string `json:"email"`
-	Role  string `json:"role"`
+	Email        string   `json:"email"`
+	Role         string   `json:"role"`
+	WorkspaceID  string   `json:"workspace_id"`
+	WorkspaceIDs []string `json:"workspace_ids"`
 }
 
 func (h *WorkspaceHandler) CreateInvitation(c *fiber.Ctx) error {
-	activeWSID, ok := c.Locals("workspace_id").(string)
-	callerRole, _ := c.Locals("role").(string)
+	activeWSID, _ := c.Locals("workspace_id").(string)
 	clerkUserID, _ := c.Locals("clerk_user_id").(string)
-
-	if !ok || activeWSID == "" {
-		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Access denied: No active workspace context"})
-	}
-
-	// 1. RBAC Enforce (Only Admin can invite)
-	if !auth.IsAuthorized(auth.Role(callerRole), auth.ActionManageMembers) {
-		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Forbidden: Only workspace Admins can invite new members"})
-	}
 
 	var req CreateInvitationRequest
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	// Resolve target workspaces
+	var targetWSIDs []string
+	if len(req.WorkspaceIDs) > 0 {
+		targetWSIDs = req.WorkspaceIDs
+	} else if req.WorkspaceID != "" {
+		targetWSIDs = []string{req.WorkspaceID}
+	} else if activeWSID != "" {
+		targetWSIDs = []string{activeWSID}
+	}
+
+	if len(targetWSIDs) == 0 {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Access denied: No workspace context"})
 	}
 
 	req.Email = strings.TrimSpace(req.Email)
@@ -406,39 +412,70 @@ func (h *WorkspaceHandler) CreateInvitation(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid role. Must be Admin, SRE, Developer, or Viewer"})
 	}
 
-	// 2. Generate secure token
-	rawToken := uuid.New().String() + "-" + uuid.New().String()
-	hashBytes := sha256.Sum256([]byte(rawToken))
-	tokenHash := hex.EncodeToString(hashBytes[:])
+	// Verify and create invitation for each target workspace
+	var createdInvites []*repository.InvitationRow
+	for _, targetWSID := range targetWSIDs {
+		// Verify caller's role in the target workspace (RBAC)
+		members, err := h.svc.ListWorkspaceMembers(c.UserContext(), targetWSID)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": fmt.Sprintf("Failed to verify workspace access for %s: %v", targetWSID, err)})
+		}
 
-	invite := &repository.InvitationRow{
-		ID:          fmt.Sprintf("inv-%s", strings.Split(uuid.New().String(), "-")[0]),
-		WorkspaceID: activeWSID,
-		Email:       req.Email,
-		Role:        req.Role,
-		TokenHash:   tokenHash,
-		InvitedBy:   clerkUserID,
-		ExpiresAt:   time.Now().Add(24 * time.Hour),
+		ownerID, err := h.svc.GetWorkspaceOwner(c.UserContext(), targetWSID)
+		if err != nil {
+			// Ignore check owner error if it fails
+		}
+
+		targetRole := ""
+		for _, member := range members {
+			if member.UserID == clerkUserID {
+				targetRole = member.Role
+				break
+			}
+		}
+
+		// Authorized if Admin/SRE or owner of workspace
+		isAuthorized := auth.IsAuthorized(auth.Role(targetRole), auth.ActionManageMembers) || clerkUserID == ownerID
+		if !isAuthorized {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": fmt.Sprintf("Forbidden: You do not have permission to invite members to workspace %s", targetWSID)})
+		}
+
+		// Generate secure token
+		rawToken := uuid.New().String() + "-" + uuid.New().String()
+		hashBytes := sha256.Sum256([]byte(rawToken))
+		tokenHash := hex.EncodeToString(hashBytes[:])
+
+		invite := &repository.InvitationRow{
+			ID:          fmt.Sprintf("inv-%s", strings.Split(uuid.New().String(), "-")[0]),
+			WorkspaceID: targetWSID,
+			Email:       req.Email,
+			Role:        req.Role,
+			TokenHash:   tokenHash,
+			InvitedBy:   clerkUserID,
+			ExpiresAt:   time.Now().Add(24 * time.Hour),
+		}
+
+		err = h.svc.CreateInvitation(c.UserContext(), invite)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": fmt.Sprintf("Failed to generate invitation for %s: %v", targetWSID, err)})
+		}
+		createdInvites = append(createdInvites, invite)
 	}
 
-	err := h.svc.CreateInvitation(c.UserContext(), invite)
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": fmt.Sprintf("Failed to generate invitation: %v", err)})
-	}
-
-	supabaseErr := sendSupabaseInvitation(invite.Email)
+	// Dispatch a single GoTrue email invitation to register the user in Auth
+	supabaseErr := sendSupabaseInvitation(req.Email)
 	clerkSent := true
 	if supabaseErr != nil {
 		log.Printf("Warning: failed to dispatch Supabase invitation: %v", supabaseErr)
 		clerkSent = false
 	}
 
+	firstInvite := createdInvites[0]
 	return c.JSON(fiber.Map{
 		"status":     "success",
-		"invite_id":  invite.ID,
-		"token":      rawToken,
-		"role":       invite.Role,
-		"expires_at": invite.ExpiresAt,
+		"invite_id":  firstInvite.ID,
+		"role":       firstInvite.Role,
+		"expires_at": firstInvite.ExpiresAt,
 		"clerk_sent": clerkSent,
 	})
 }
