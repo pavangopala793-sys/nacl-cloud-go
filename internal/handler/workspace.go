@@ -418,7 +418,7 @@ func (h *WorkspaceHandler) CreateInvitation(c *fiber.Ctx) error {
 		Role:        req.Role,
 		TokenHash:   tokenHash,
 		InvitedBy:   clerkUserID,
-		ExpiresAt:   time.Now().Add(7 * 24 * time.Hour),
+		ExpiresAt:   time.Now().Add(24 * time.Hour),
 	}
 
 	err := h.svc.CreateInvitation(c.UserContext(), invite)
