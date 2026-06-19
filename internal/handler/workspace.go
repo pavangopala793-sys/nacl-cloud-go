@@ -461,7 +461,7 @@ func sendSupabaseInvitation(email string) error {
 		return err
 	}
 
-	url := fmt.Sprintf("%s/auth/v1/admin/invite", strings.TrimSuffix(supabaseURL, "/"))
+	url := fmt.Sprintf("%s/auth/v1/invite", strings.TrimSuffix(supabaseURL, "/"))
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonPayload))
 	if err != nil {
 		return err
