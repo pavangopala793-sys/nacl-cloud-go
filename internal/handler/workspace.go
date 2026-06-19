@@ -446,6 +446,7 @@ func (h *WorkspaceHandler) CreateInvitation(c *fiber.Ctx) error {
 func sendSupabaseInvitation(email string) error {
 	supabaseURL := os.Getenv("NEXT_PUBLIC_SUPABASE_URL")
 	serviceRoleKey := os.Getenv("SUPABASE_SERVICE_ROLE_KEY")
+	supabaseAuthURL := os.Getenv("SUPABASE_AUTH_URL")
 
 	if supabaseURL == "" || serviceRoleKey == "" {
 		log.Println("Warning: NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY not set. Skipping Supabase invitation email dispatch.")
@@ -464,7 +465,12 @@ func sendSupabaseInvitation(email string) error {
 		return err
 	}
 
-	url := fmt.Sprintf("%s/auth/v1/invite", strings.TrimSuffix(supabaseURL, "/"))
+	var url string
+	if supabaseAuthURL != "" {
+		url = fmt.Sprintf("%s/invite", strings.TrimSuffix(supabaseAuthURL, "/"))
+	} else {
+		url = fmt.Sprintf("%s/auth/v1/invite", strings.TrimSuffix(supabaseURL, "/"))
+	}
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonPayload))
 	if err != nil {
 		return err
