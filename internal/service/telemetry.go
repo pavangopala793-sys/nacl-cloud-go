@@ -103,9 +103,7 @@ func (s *TelemetryService) LogManualDispatch(ctx context.Context, id, environmen
 	return s.repo.LogManualDispatch(ctx, id, environment, tenantID, sqlStr)
 }
 
-// CompileSchema calls gRPC CompileSchema endpoint on the Rust compiler engine
-func (s *TelemetryService) CompileSchema(ctx context.Context, schemaContent, env, tenantID string) (*pb.CompileSchemaResponse, error) {
-	// Fetch workspace settings from DB
+func (s *TelemetryService) GetWorkspaceSettings(ctx context.Context, tenantID string) (*pb.WorkspaceSettings, error) {
 	var settingsJSON []byte
 	settings := &pb.WorkspaceSettings{
 		PaddingEnabled:      true,
@@ -120,8 +118,17 @@ func (s *TelemetryService) CompileSchema(ctx context.Context, schemaContent, env
 	err := s.db.QueryRowContext(ctx, "SELECT settings FROM workspaces WHERE id = $1", tenantID).Scan(&settingsJSON)
 	if err == nil && len(settingsJSON) > 0 && string(settingsJSON) != "{}" {
 		if err := protojson.Unmarshal(settingsJSON, settings); err != nil {
-			fmt.Printf("Error unmarshaling workspace settings: %v\n", err)
+			return nil, err
 		}
+	}
+	return settings, nil
+}
+
+// CompileSchema calls gRPC CompileSchema endpoint on the Rust compiler engine
+func (s *TelemetryService) CompileSchema(ctx context.Context, schemaContent, env, tenantID string) (*pb.CompileSchemaResponse, error) {
+	settings, err := s.GetWorkspaceSettings(ctx, tenantID)
+	if err != nil {
+		fmt.Printf("Error fetching workspace settings: %v\n", err)
 	}
 
 	return s.grpcClient.CompileSchema(ctx, &pb.CompileSchemaRequest{

@@ -447,38 +447,47 @@ func (h *TelemetryHandler) ApplyPlan(c *fiber.Ctx) error {
 		lineageHash = "genesis"
 	}
 
-	// Verify cryptographic signature (Ed25519 signature verification)
-	if len(req.Signatures) == 0 {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "No signatures provided for validation"})
+	// Fetch workspace settings from DB to check if SRE/Admin approval is required
+	settings, err := h.svc.GetWorkspaceSettings(c.UserContext(), tenantID)
+	sreApprovalRequired := true
+	if err == nil && settings != nil {
+		sreApprovalRequired = settings.SreApprovalRequired
 	}
 
-	for _, sigPair := range req.Signatures {
-		if len(sigPair) != 2 {
-			continue
-		}
-		pubKeyHex := sigPair[0]
-		sigHex := sigPair[1]
-
-		pubKeyBytes, err := hex.DecodeString(pubKeyHex)
-		if err != nil || len(pubKeyBytes) != 32 {
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid public key hex length"})
+	if sreApprovalRequired {
+		// Verify cryptographic signature (Ed25519 signature verification)
+		if len(req.Signatures) == 0 {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "No signatures provided for validation"})
 		}
 
-		sigBytes, err := hex.DecodeString(sigHex)
-		if err != nil || len(sigBytes) != 64 {
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid signature hex length"})
-		}
+		for _, sigPair := range req.Signatures {
+			if len(sigPair) != 2 {
+				continue
+			}
+			pubKeyHex := sigPair[0]
+			sigHex := sigPair[1]
 
-		// Calculate SHA-256 of the schema_infra content
-		hashInstance := sha256.New()
-		hashInstance.Write([]byte(req.SchemaInfra))
-		schemaHash := hex.EncodeToString(hashInstance.Sum(nil))
+			pubKeyBytes, err := hex.DecodeString(pubKeyHex)
+			if err != nil || len(pubKeyBytes) != 32 {
+				return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid public key hex length"})
+			}
 
-		// Canonical message: schema_hash|environment|exec_id|lineage_epoch_hash|expires_at
-		canonicalPayload := fmt.Sprintf("%s|%s|%s|%s|%s", schemaHash, environment, execID, lineageHash, expiresAtStr)
+			sigBytes, err := hex.DecodeString(sigHex)
+			if err != nil || len(sigBytes) != 64 {
+				return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid signature hex length"})
+			}
 
-		if !ed25519.Verify(pubKeyBytes, []byte(canonicalPayload), sigBytes) {
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Cryptographic signature verification failed"})
+			// Calculate SHA-256 of the schema_infra content
+			hashInstance := sha256.New()
+			hashInstance.Write([]byte(req.SchemaInfra))
+			schemaHash := hex.EncodeToString(hashInstance.Sum(nil))
+
+			// Canonical message: schema_hash|environment|exec_id|lineage_epoch_hash|expires_at
+			canonicalPayload := fmt.Sprintf("%s|%s|%s|%s|%s", schemaHash, environment, execID, lineageHash, expiresAtStr)
+
+			if !ed25519.Verify(pubKeyBytes, []byte(canonicalPayload), sigBytes) {
+				return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Cryptographic signature verification failed"})
+			}
 		}
 	}
 
