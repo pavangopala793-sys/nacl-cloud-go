@@ -506,6 +506,137 @@ func (r *PostgresTelemetryRepository) seedTenant(ctx context.Context, tenantID s
 	}
 	defer tx.Rollback()
 
+	type mockMigration struct {
+		ddl           string
+		riskLevel     string
+		riskScore     float64
+		mutatedTables int
+		heavyRewrite  bool
+		locks         string
+	}
+
+	mockMigrations := []mockMigration{
+		{
+			ddl: `-- migration: 001_create_user_profiles_table.sql
+CREATE TABLE user_profiles (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    clerk_user_id VARCHAR(255) UNIQUE,
+    email VARCHAR(255) NOT NULL UNIQUE,
+    display_name VARCHAR(100),
+    avatar_url TEXT,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);`,
+			riskLevel:     "MODERATE",
+			riskScore:     3.2,
+			mutatedTables: 1,
+			heavyRewrite:  false,
+			locks:         `["user_profiles"]`,
+		},
+		{
+			ddl: `-- migration: 002_add_supabase_auth_sync_columns.sql
+ALTER TABLE user_profiles 
+    ADD COLUMN supabase_user_id UUID UNIQUE,
+    ADD COLUMN email_verified BOOLEAN DEFAULT FALSE,
+    ADD COLUMN last_sign_in_at TIMESTAMPTZ;`,
+			riskLevel:     "MODERATE",
+			riskScore:     4.5,
+			mutatedTables: 1,
+			heavyRewrite:  false,
+			locks:         `["user_profiles"]`,
+		},
+		{
+			ddl: `-- migration: 003_create_user_identities_table.sql
+CREATE TABLE user_identities (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
+    provider_name VARCHAR(50) NOT NULL,
+    provider_user_id VARCHAR(255) NOT NULL,
+    access_token_encrypted TEXT,
+    refresh_token_encrypted TEXT,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (provider_name, provider_user_id)
+);`,
+			riskLevel:     "HIGH",
+			riskScore:     6.8,
+			mutatedTables: 2,
+			heavyRewrite:  false,
+			locks:         `["user_identities", "user_profiles"]`,
+		},
+		{
+			ddl: `-- migration: 004_add_concurrent_index_on_email.sql
+CREATE INDEX CONCURRENTLY idx_user_profiles_email_lower ON user_profiles (LOWER(email));`,
+			riskLevel:     "TRIVIAL",
+			riskScore:     1.5,
+			mutatedTables: 1,
+			heavyRewrite:  false,
+			locks:         `["user_profiles"]`,
+		},
+		{
+			ddl: `-- migration: 005_drop_legacy_clerk_columns.sql
+ALTER TABLE user_profiles DROP COLUMN clerk_user_id;`,
+			riskLevel:     "CRITICAL",
+			riskScore:     8.9,
+			mutatedTables: 1,
+			heavyRewrite:  true,
+			locks:         `["user_profiles"]`,
+		},
+		{
+			ddl: `-- migration: 006_create_user_sessions_table.sql
+CREATE TABLE user_sessions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
+    session_token VARCHAR(255) NOT NULL UNIQUE,
+    ip_address VARCHAR(45),
+    user_agent TEXT,
+    is_mfa_verified BOOLEAN DEFAULT FALSE,
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);`,
+			riskLevel:     "HIGH",
+			riskScore:     7.2,
+			mutatedTables: 2,
+			heavyRewrite:  false,
+			locks:         `["user_sessions", "user_profiles"]`,
+		},
+		{
+			ddl: `-- migration: 007_rename_display_name_to_full_name.sql
+ALTER TABLE user_profiles RENAME COLUMN display_name TO full_name;`,
+			riskLevel:     "CRITICAL",
+			riskScore:     9.3,
+			mutatedTables: 1,
+			heavyRewrite:  true,
+			locks:         `["user_profiles"]`,
+		},
+		{
+			ddl: `-- migration: 008_add_mfa_factors_table.sql
+CREATE TABLE user_mfa_factors (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
+    factor_type VARCHAR(50) NOT NULL,
+    status VARCHAR(50) DEFAULT 'unverified',
+    secret VARCHAR(255) NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);`,
+			riskLevel:     "HIGH",
+			riskScore:     6.5,
+			mutatedTables: 2,
+			heavyRewrite:  false,
+			locks:         `["user_mfa_factors", "user_profiles"]`,
+		},
+		{
+			ddl: `-- migration: 009_add_constraint_on_sessions_ip.sql
+ALTER TABLE user_sessions ADD CONSTRAINT check_ip_length CHECK (char_length(ip_address) <= 45);`,
+			riskLevel:     "MODERATE",
+			riskScore:     4.2,
+			mutatedTables: 1,
+			heavyRewrite:  false,
+			locks:         `["user_sessions"]`,
+		},
+	}
+
+	envs := []string{"production", "staging", "development"}
+
 	now := time.Now().UTC()
 	for i := 1; i <= 1000; i++ {
 		execID := fmt.Sprintf("exec_sim_%s_%d", tenantID, i)
@@ -516,6 +647,9 @@ func (r *PostgresTelemetryRepository) seedTenant(ctx context.Context, tenantID s
 		ddlUs := int64(1800 + (i%11)*200 + (i%4)*100)
 		totalUs := parseUs + sortUs + ddlUs
 
+		mig := mockMigrations[i%len(mockMigrations)]
+		env := envs[i%len(envs)]
+
 		_, err = tx.ExecContext(ctx, `
 			INSERT INTO telemetry_logs (
 				execution_id, timestamp_utc, nacl_engine_version, environment, lineage_epoch_hash,
@@ -524,10 +658,10 @@ func (r *PostgresTelemetryRepository) seedTenant(ctx context.Context, tenantID s
 				infrastructure_exclusive_locks, tenant_id, compiled_ddl
 			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 			ON CONFLICT (execution_id) DO NOTHING;
-		`, execID, ts, "1.0.0", "production", "genesis",
+		`, execID, ts, "1.0.0", env, "genesis",
 			parseUs, sortUs, ddlUs, totalUs,
-			"TRIVIAL", 1.2, 1, false,
-			[]byte("[]"), tenantID, "CREATE TABLE ...",
+			mig.riskLevel, mig.riskScore, mig.mutatedTables, mig.heavyRewrite,
+			[]byte(mig.locks), tenantID, mig.ddl,
 		)
 		if err != nil {
 			return err

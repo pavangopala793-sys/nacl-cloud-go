@@ -182,3 +182,164 @@ func TestWorkspaceInvitations(t *testing.T) {
 	}
 }
 
+func TestPostgresWorkspaceRepositoryAll(t *testing.T) {
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+		t.Skip("Skipping integration test: DATABASE_URL not set")
+	}
+
+	db, err := sql.Open("postgres", dbURL)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	repo := NewWorkspaceRepository(db)
+
+	wsID := "ws-test-all-rep"
+	ownerID := "owner-all-rep"
+	memberID := "member-all-rep"
+
+	// Cleanup first
+	_, _ = db.ExecContext(ctx, "DELETE FROM workspace_settings_audit WHERE workspace_id = $1", wsID)
+	_, _ = db.ExecContext(ctx, "DELETE FROM workspace_invitations WHERE workspace_id = $1", wsID)
+	_, _ = db.ExecContext(ctx, "DELETE FROM workspace_members WHERE workspace_id = $1", wsID)
+	_, _ = db.ExecContext(ctx, "DELETE FROM workspaces WHERE id = $1", wsID)
+	_, _ = db.ExecContext(ctx, "DELETE FROM developers WHERE id = $1 OR id = $2", ownerID, memberID)
+
+	defer func() {
+		_, _ = db.ExecContext(ctx, "DELETE FROM workspace_settings_audit WHERE workspace_id = $1", wsID)
+		_, _ = db.ExecContext(ctx, "DELETE FROM workspace_invitations WHERE workspace_id = $1", wsID)
+		_, _ = db.ExecContext(ctx, "DELETE FROM workspace_members WHERE workspace_id = $1", wsID)
+		_, _ = db.ExecContext(ctx, "DELETE FROM workspaces WHERE id = $1", wsID)
+		_, _ = db.ExecContext(ctx, "DELETE FROM developers WHERE id = $1 OR id = $2", ownerID, memberID)
+	}()
+
+	// Setup developers for JOIN checks
+	_, err = db.ExecContext(ctx, "INSERT INTO developers (id, name, email) VALUES ($1, $2, $3)", ownerID, "Owner Name", "owner@company.com")
+	if err != nil {
+		t.Fatalf("Failed setup owner: %v", err)
+	}
+	_, err = db.ExecContext(ctx, "INSERT INTO developers (id, name, email) VALUES ($1, $2, $3)", memberID, "Member Name", "member@company.com")
+	if err != nil {
+		t.Fatalf("Failed setup member: %v", err)
+	}
+
+	// 1. Create Workspace (automatically inserts owner as Admin)
+	err = repo.CreateWorkspace(ctx, wsID, "Test Repo Workspace", ownerID)
+	if err != nil {
+		t.Fatalf("CreateWorkspace failed: %v", err)
+	}
+
+	// 2. Get Workspace Owner
+	owner, err := repo.GetWorkspaceOwner(ctx, wsID)
+	if err != nil {
+		t.Fatalf("GetWorkspaceOwner failed: %v", err)
+	}
+	if owner != ownerID {
+		t.Errorf("Expected owner %s, got %s", ownerID, owner)
+	}
+
+	// 3. Add Workspace Member
+	err = repo.AddWorkspaceMember(ctx, wsID, memberID, "Developer")
+	if err != nil {
+		t.Fatalf("AddWorkspaceMember failed: %v", err)
+	}
+
+	// 4. List Workspace Members
+	members, err := repo.ListWorkspaceMembers(ctx, wsID)
+	if err != nil {
+		t.Fatalf("ListWorkspaceMembers failed: %v", err)
+	}
+	if len(members) != 2 {
+		t.Errorf("Expected 2 members, got %d", len(members))
+	}
+
+	// 5. List Workspaces for User
+	workspaces, err := repo.ListWorkspaces(ctx, memberID)
+	if err != nil {
+		t.Fatalf("ListWorkspaces failed: %v", err)
+	}
+	if len(workspaces) != 1 || workspaces[0].ID != wsID {
+		t.Errorf("Expected 1 workspace with ID %s, got %v", wsID, workspaces)
+	}
+
+	// 6. Get default settings
+	settings, err := repo.GetWorkspaceSettings(ctx, wsID)
+	if err != nil {
+		t.Fatalf("GetWorkspaceSettings failed: %v", err)
+	}
+	if !settings.PaddingEnabled {
+		t.Errorf("Expected default PaddingEnabled true")
+	}
+
+	// 7. Update workspace settings
+	settings.PaddingEnabled = false
+	settings.LockTimeoutMs = 3000
+	err = repo.UpdateWorkspaceSettings(ctx, wsID, settings, ownerID)
+	if err != nil {
+		t.Fatalf("UpdateWorkspaceSettings failed: %v", err)
+	}
+
+	// Verify updated settings
+	settingsUpdated, err := repo.GetWorkspaceSettings(ctx, wsID)
+	if err != nil {
+		t.Fatalf("GetWorkspaceSettings updated failed: %v", err)
+	}
+	if settingsUpdated.PaddingEnabled || settingsUpdated.LockTimeoutMs != 3000 {
+		t.Errorf("Settings not updated correctly: %v", settingsUpdated)
+	}
+
+	// 8. Get settings audit logs
+	logs, err := repo.GetSettingsAuditLogs(ctx, wsID)
+	if err != nil {
+		t.Fatalf("GetSettingsAuditLogs failed: %v", err)
+	}
+	if len(logs) != 1 {
+		t.Errorf("Expected 1 audit entry, got %d", len(logs))
+	}
+
+	// 9. Create and Revoke Invitation
+	inv := &InvitationRow{
+		ID:          "inv-temp-revoke",
+		WorkspaceID: wsID,
+		Email:       "temp@company.com",
+		Role:        "Viewer",
+		TokenHash:   "hash_temp",
+		InvitedBy:   ownerID,
+		ExpiresAt:   time.Now().Add(24 * time.Hour),
+	}
+	err = repo.CreateInvitation(ctx, inv)
+	if err != nil {
+		t.Fatalf("CreateInvitation failed: %v", err)
+	}
+
+	err = repo.RevokeInvitation(ctx, inv.ID)
+	if err != nil {
+		t.Fatalf("RevokeInvitation failed: %v", err)
+	}
+
+	// 10. Remove Workspace Member
+	err = repo.RemoveWorkspaceMember(ctx, wsID, memberID)
+	if err != nil {
+		t.Fatalf("RemoveWorkspaceMember failed: %v", err)
+	}
+
+	// Verify members count is back to 1
+	members, err = repo.ListWorkspaceMembers(ctx, wsID)
+	if err != nil {
+		t.Fatalf("ListWorkspaceMembers check failed: %v", err)
+	}
+	if len(members) != 1 {
+		t.Errorf("Expected 1 member, got %d", len(members))
+	}
+
+	// 11. Delete Workspace
+	err = repo.DeleteWorkspace(ctx, wsID)
+	if err != nil {
+		t.Fatalf("DeleteWorkspace failed: %v", err)
+	}
+}
+
+
